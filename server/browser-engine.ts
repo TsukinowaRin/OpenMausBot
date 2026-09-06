@@ -9,7 +9,7 @@
 // Fail closed, say why: a missing engine reports `unavailable` with a
 // reason a person can act on, never a silently browserless bot.
 import { spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 
@@ -171,12 +171,17 @@ export function agentBrowserIntegration(input: {
   binaryPath: string;
   session: string;
   encryptionKey: string;
+  /** Guest sessions must never save cookies or localStorage to disk. */
+  persistent?: boolean;
   headless?: boolean;
   env?: NodeJS.ProcessEnv;
 }): { command: string; args: string[]; env: Record<string, string> } {
   const env: Record<string, string> = {
     AGENT_BROWSER_SESSION: input.session,
-    AGENT_BROWSER_RESTORE: "1",
+    // This is a restore *name*, not a boolean. "1" would give every bot
+    // the same saved cookies despite using different daemon sessions.
+    AGENT_BROWSER_RESTORE: input.session,
+    AGENT_BROWSER_RESTORE_SAVE: input.persistent === false ? "never" : "auto",
     AGENT_BROWSER_ENCRYPTION_KEY: input.encryptionKey,
   };
   if (input.headless !== false) env.AGENT_BROWSER_HEADLESS = "1";
@@ -187,6 +192,7 @@ export function agentBrowserIntegration(input: {
 
 /** Session ids are file-system and shell safe: a bot id or a profile partition. */
 export function browserSessionId(botId: string, partitionId: string): string {
+  if (partitionId === "guest") return `guest-${randomUUID()}`;
   const raw = partitionId || `bot-${botId}`;
   return raw.replace(/[^A-Za-z0-9_.-]/gu, "_").slice(0, 96);
 }

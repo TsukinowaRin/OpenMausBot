@@ -914,7 +914,7 @@ function engineBrowserIntegration(botId: string, profile: string | undefined) {
     return null;
   }
   const profileTarget = profile && profile !== "guest" ? browserProfilePartitionTarget(cfg, profile) : null;
-  const partitionId = profile === "guest" ? `guest-${botId}` : (profileTarget?.partitionId ?? "");
+  const partitionId = profile === "guest" ? "guest" : (profileTarget?.partitionId ?? "");
   const session = browserSessionId(botId, partitionId);
   return {
     connection: null,
@@ -924,6 +924,7 @@ function engineBrowserIntegration(botId: string, profile: string | undefined) {
       binaryPath: status.binaryPath,
       session,
       encryptionKey: browserEngineEncryptionKey(),
+      persistent: profile !== "guest",
     }),
   };
 }

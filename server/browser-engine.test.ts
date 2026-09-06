@@ -102,9 +102,19 @@ describe("what a bot gets", () => {
     const spec = agentBrowserIntegration({ binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "k".repeat(64), env: { PATH: "/usr/bin" } });
     expect(spec.command).toBe("/x/agent-browser");
     expect(spec.args).toEqual(["mcp", "--tools", "core", "--no-webmcp"]);
-    expect(spec.env).toMatchObject({ AGENT_BROWSER_SESSION: "bot-1", AGENT_BROWSER_RESTORE: "1", AGENT_BROWSER_HEADLESS: "1", PATH: "/usr/bin" });
+    expect(spec.env).toMatchObject({ AGENT_BROWSER_SESSION: "bot-1", AGENT_BROWSER_RESTORE: "bot-1", AGENT_BROWSER_RESTORE_SAVE: "auto", AGENT_BROWSER_HEADLESS: "1", PATH: "/usr/bin" });
     expect(spec.env.AGENT_BROWSER_ENCRYPTION_KEY).toBe("k".repeat(64));
     expect(agentBrowserIntegration({ binaryPath: "/x", session: "s", encryptionKey: "k", headless: false }).env.AGENT_BROWSER_HEADLESS).toBeUndefined();
+  });
+
+  it("keeps saved state separate for different bots and never saves guest state", () => {
+    const spec = (session: string, persistent = true) => agentBrowserIntegration({ binaryPath: "/x", session, encryptionKey: "k", persistent });
+    expect(spec("bot-a").env.AGENT_BROWSER_RESTORE).not.toBe(spec("bot-b").env.AGENT_BROWSER_RESTORE);
+    const first = browserSessionId("bot-a", "guest");
+    const second = browserSessionId("bot-a", "guest");
+    expect(first).toMatch(/^guest-[a-f0-9-]+$/u);
+    expect(first).not.toBe(second);
+    expect(spec(first, false).env).toMatchObject({ AGENT_BROWSER_RESTORE: first, AGENT_BROWSER_RESTORE_SAVE: "never" });
   });
 
   it("names sessions after the shared profile, else the bot, in shell-safe form", () => {
