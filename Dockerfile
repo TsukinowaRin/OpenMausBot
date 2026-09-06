@@ -38,6 +38,13 @@ COPY --from=build --chown=maus:maus /src/dist ./dist
 # Optional engine CLIs baked into the image (space-separated npm packages).
 ARG ENGINES=""
 RUN if [ -n "$ENGINES" ]; then npm install -g $ENGINES; fi
+# The bots' browser (docs/plans/browser-engine.md): the pinned agent-browser
+# and a Chrome for Testing with its libraries, so a server bot can browse.
+# Pin here and in server/browser-engine-release.ts together.
+ARG AGENT_BROWSER_VERSION=0.36.0
+RUN npm install -g agent-browser@${AGENT_BROWSER_VERSION} \
+  && agent-browser install --with-deps \
+  && agent-browser --version
 ENV HOME=/data \
     OMB_DATA_DIR=/data/.openmausbot \
     OMB_STATIC_DIR=/app/dist \
