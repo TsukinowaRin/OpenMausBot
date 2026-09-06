@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -27,23 +27,27 @@ describe("finding the browser engine", () => {
   it("prefers the explicit path, then the pinned download, then PATH, and reports why when nothing is there", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "omb-engine-"));
     scratch.push(dataDir);
-    const pinned = pinnedBinaryPath(dataDir, "linux");
+    const pinned = pinnedBinaryPath(dataDir);
+    const name = process.platform === "win32" ? "agent-browser.exe" : "agent-browser";
+    const pathDir = join(dataDir, "bin");
+    const pathBinary = join(pathDir, name);
+    const override = join(dataDir, "override", name);
     const files = new Set<string>();
     const exists = (p: string) => files.has(p);
-    const env = { PATH: "/usr/local/bin:/usr/bin" };
+    const env = { PATH: [join(dataDir, "empty"), pathDir].join(delimiter) };
 
-    expect(resolveAgentBrowserBinary({ dataDir, env, platform: "linux", exists })).toBeNull();
-    expect(browserEngineStatus({ dataDir, env, platform: "linux", exists })).toMatchObject({ kind: "unavailable", installable: true });
+    expect(resolveAgentBrowserBinary({ dataDir, env, exists })).toBeNull();
+    expect(browserEngineStatus({ dataDir, env, exists })).toMatchObject({ kind: "unavailable", installable: true });
 
-    files.add("/usr/bin/agent-browser");
-    expect(resolveAgentBrowserBinary({ dataDir, env, platform: "linux", exists })).toBe("/usr/bin/agent-browser");
+    files.add(pathBinary);
+    expect(resolveAgentBrowserBinary({ dataDir, env, exists })).toBe(pathBinary);
     files.add(pinned);
-    expect(resolveAgentBrowserBinary({ dataDir, env, platform: "linux", exists })).toBe(pinned);
-    files.add("/opt/ab/agent-browser");
-    expect(resolveAgentBrowserBinary({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: "/opt/ab/agent-browser" }, platform: "linux", exists })).toBe("/opt/ab/agent-browser");
+    expect(resolveAgentBrowserBinary({ dataDir, env, exists })).toBe(pinned);
+    files.add(override);
+    expect(resolveAgentBrowserBinary({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: override }, exists })).toBe(override);
     // an override that does not exist is an error, not a silent fallback
-    expect(resolveAgentBrowserBinary({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: "/nope/agent-browser" }, platform: "linux", exists })).toBeNull();
-    expect(browserEngineStatus({ dataDir, env, platform: "linux", exists })).toMatchObject({ kind: "ready", binaryPath: pinned, version: AGENT_BROWSER_VERSION });
+    expect(resolveAgentBrowserBinary({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: join(dataDir, "missing", name) }, exists })).toBeNull();
+    expect(browserEngineStatus({ dataDir, env, exists })).toMatchObject({ kind: "ready", binaryPath: pinned, version: AGENT_BROWSER_VERSION });
   });
 
   it("knows every target Vercel publishes, and picks the musl build on Alpine", () => {
