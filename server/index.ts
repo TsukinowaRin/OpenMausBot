@@ -11684,6 +11684,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!browserEngineInstall) {
         const status = browserEngineStatus();
         if (status.kind === "unavailable" && !status.installable) return json(res, 409, { error: status.reason });
+        browserEngineInstallError = null;
         browserEngineInstall = (async () => {
           const binary = resolveAgentBrowserBinary() ?? await installAgentBrowserBinary({ log: (line) => console.log(line) });
           await ensureChrome(binary, { log: (line) => console.log(line) });
@@ -11694,6 +11695,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           browserEngineInstall = null;
           broadcast({ kind: "config", ...configStatus() });
         });
+        broadcast({ kind: "config", ...configStatus() });
       }
       return json(res, 202, { installing: true });
     }
