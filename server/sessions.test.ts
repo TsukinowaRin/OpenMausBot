@@ -14,6 +14,7 @@ import {
   SESSION_TTL_MS,
   SessionRegistry,
   STREAM_TICKET_TTL_MS,
+  sessionTtlMs,
 } from "./sessions.ts";
 
 let dir: string;
@@ -142,11 +143,11 @@ describe("sessions", () => {
     expect(reloaded.authenticate("omb_sess_nope")).toBeNull();
   });
 
-  it("expires after 30 days and can be revoked", () => {
+  it("expires after 30 days without use and can be revoked", () => {
     const { token, session } = pair();
-    clock += SESSION_TTL_MS - 1;
-    expect(registry.authenticate(token)?.id).toBe(session.id);
-    clock += 2;
+    clock += SESSION_TTL_MS / 2 - 1;
+    expect(registry.authenticate(token)?.id).toBe(session.id); // before the halfway mark: no renewal
+    clock += SESSION_TTL_MS / 2 + 2;
     expect(registry.authenticate(token)).toBeNull();
     const other = pair("iPad");
     expect(registry.list().map((s) => s.label)).toEqual(["iPad"]);
@@ -165,6 +166,31 @@ describe("sessions", () => {
     registry.authenticate(token);
     expect(registry.list()[0]?.lastSeenAt).toBe(clock);
     expect(statSync(file()).mtimeMs).toBeGreaterThanOrEqual(before);
+  });
+
+  it("renews a session used past its halfway mark, and re-issues the cookie once", () => {
+    const { token, session } = pair();
+    expect(registry.cookieRefreshSeconds(session.id)).toBeNull(); // the exchange's cookie is current
+    clock += SESSION_TTL_MS / 2 - 60_000;
+    registry.authenticate(token);
+    expect(registry.list()[0]?.expiresAt).toBe(session.expiresAt); // not yet halfway: untouched
+    clock += 120_000;
+    expect(registry.authenticate(token)?.id).toBe(session.id);
+    expect(registry.list()[0]?.expiresAt).toBe(clock + SESSION_TTL_MS);
+    expect(registry.cookieRefreshSeconds(session.id)).toBe(SESSION_TTL_MS / 1000);
+    expect(registry.cookieRefreshSeconds(session.id)).toBeNull(); // sent once, then quiet
+    clock += SESSION_TTL_MS - 1;
+    expect(registry.authenticate(token)?.id).toBe(session.id); // alive well past the original term
+    const reloaded = new SessionRegistry({ file: file(), now: () => clock });
+    expect(reloaded.cookieRefreshSeconds(session.id)).not.toBeNull(); // a fresh process re-sends once
+  });
+
+  it("reads the term from OMB_SESSION_TTL_DAYS and falls back to 30 days", () => {
+    const month = 30 * 24 * 60 * 60_000;
+    expect(sessionTtlMs(undefined)).toBe(month);
+    expect(sessionTtlMs("7")).toBe(7 * 24 * 60 * 60_000);
+    expect(sessionTtlMs("0")).toBe(month);
+    expect(sessionTtlMs("soon")).toBe(month);
   });
 });
 

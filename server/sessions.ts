@@ -19,7 +19,15 @@ export const SCOPES: readonly Scope[] = ["admin", "client"];
 export const PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const PAIRING_CODE_LENGTH = 12;
 export const PAIRING_CODE_TTL_MS = 5 * 60_000;
-export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
+/** How long a paired device stays signed in without being used. A session
+ * used past its halfway mark is renewed for the full term (see
+ * `authenticate`), so a device in regular use never has to pair again; one
+ * that goes quiet lapses. OMB_SESSION_TTL_DAYS overrides the 30-day default. */
+export function sessionTtlMs(value: string | undefined): number {
+  const days = Number(value);
+  return Number.isFinite(days) && days > 0 ? days * 24 * 60 * 60_000 : 30 * 24 * 60 * 60_000;
+}
+export const SESSION_TTL_MS = sessionTtlMs(process.env.OMB_SESSION_TTL_DAYS);
 export const STREAM_TICKET_TTL_MS = 5 * 60_000;
 /** Per-source slow-down only. A 60-bit code cannot be guessed online in
  * five minutes whatever the rate, so the lock exists to make noise visible,
@@ -139,6 +147,10 @@ export class SessionRegistry {
   private replays: Array<{ codeHash: string; attemptId: string; result: ExchangeResult; expiresAt: number }> = [];
   private readonly onRevoked = new Set<(sessionId: string) => void>();
   private lastSeenWrites = new Map<string, number>();
+  /** The expiry the browser's cookie was last issued with, per session, so a
+   * renewal can be noticed and the cookie re-sent exactly once. Memory only:
+   * after a restart every cookie session is refreshed on its next request. */
+  private cookieExpiry = new Map<string, number>();
   private readonly now: () => number;
   private readonly options: { file: string; now?: () => number };
 
@@ -197,6 +209,7 @@ export class SessionRegistry {
 
   private forget(sessionId: string): void {
     this.lastSeenWrites.delete(sessionId);
+    this.cookieExpiry.delete(sessionId);
     for (const [hash, ticket] of this.tickets) if (ticket.sessionId === sessionId) this.tickets.delete(hash);
     for (const listener of this.onRevoked) listener(sessionId);
   }
@@ -297,6 +310,7 @@ export class SessionRegistry {
     };
     this.sessions.push(record);
     this.lastSeenWrites.set(record.id, now); // the exchange itself was the first sighting
+    this.cookieExpiry.set(record.id, record.expiresAt); // the cookie the exchange hands out carries this term
     this.persist();
     const result: ExchangeResult = { ok: true, token, session: publicSession(record) };
     if (attemptId) this.replays.push({ codeHash: presented, attemptId, result, expiresAt: now + EXCHANGE_REPLAY_MS });
@@ -311,6 +325,17 @@ export class SessionRegistry {
     const now = this.now();
     const record = this.sessions.find((s) => sameDigest(s.tokenHash, hash));
     if (!record || record.expiresAt <= now) return null;
+    // Sliding expiry: a session used past its halfway mark is renewed for
+    // the full term. Only a still-valid session gets here, so nothing
+    // expired is ever revived, and the write happens at most once per
+    // half-term, so it adds nothing to the last-seen traffic below.
+    if (record.expiresAt - now <= SESSION_TTL_MS / 2) {
+      record.expiresAt = now + SESSION_TTL_MS;
+      record.lastSeenAt = now;
+      this.lastSeenWrites.set(record.id, now);
+      this.persist();
+      return record;
+    }
     const lastWrite = this.lastSeenWrites.get(record.id) ?? 0;
     if (now - lastWrite >= LAST_SEEN_WRITE_INTERVAL_MS) {
       record.lastSeenAt = now;
@@ -318,6 +343,20 @@ export class SessionRegistry {
       this.persist();
     }
     return record;
+  }
+
+  /** Seconds a re-issued cookie should live, when the browser's copy is
+   * behind the record (the session was renewed since the cookie was last
+   * set, or this process has not seen the session yet). Null when the
+   * browser's cookie is already current, so ordinary requests carry no
+   * Set-Cookie. */
+  cookieRefreshSeconds(sessionId: string): number | null {
+    const record = this.sessions.find((s) => s.id === sessionId);
+    if (!record) return null;
+    const known = this.cookieExpiry.get(sessionId);
+    if (known !== undefined && known >= record.expiresAt) return null;
+    this.cookieExpiry.set(sessionId, record.expiresAt);
+    return Math.max(1, Math.floor((record.expiresAt - this.now()) / 1000));
   }
 
   /** Still valid right now (prunes expiry first). */

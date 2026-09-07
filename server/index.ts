@@ -322,6 +322,7 @@ import {
   requestOrigin,
   requestSource,
   resolveRequestAuth,
+  parseCookies,
   serializeSessionCookie,
   sessionCookieName,
 } from "./request-auth.ts";
@@ -7571,6 +7572,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       loopbackMutationToken: desktopMutationToken,
       companionMutationToken,
     });
+    // A browser's cookie carries the term the session had when it was set.
+    // Once the server renews the session (sessions.ts, sliding expiry), the
+    // cookie is re-issued so the browser's copy does not lapse first. Sent
+    // once per renewal, not on every request.
+    if (gate.auth?.kind === "session" && gate.auth.via === "cookie") {
+      const refresh = sessions.cookieRefreshSeconds(gate.auth.session.id);
+      const presented = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+      if (refresh !== null && presented) {
+        const secure = requestOrigin(req)?.startsWith("https://") === true;
+        res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, presented, { secure, maxAgeSeconds: refresh }));
+      }
+    }
     // Reachability probe, public: the phone races it across a server's
     // addresses before it has a session, and the tunnel verifier polls it.
     // A stranger learns only the app name; pid (the desktop boot probe keys
