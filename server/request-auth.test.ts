@@ -22,7 +22,7 @@ import {
   serializeSessionCookie,
   sessionCookieName,
 } from "./request-auth.ts";
-import { SessionRegistry } from "./sessions.ts";
+import { SESSION_TTL_MS, SessionRegistry } from "./sessions.ts";
 
 function request(headers: Record<string, string>, method = "GET"): IncomingMessage {
   // SAFETY: the resolver reads only headers and method; a bare object is the whole contract here
@@ -189,6 +189,25 @@ describe("resolveRequestAuth", () => {
     const foreignOrigin = resolve({ host: "127.0.0.1:8799", origin: "https://evil.example" });
     expect(foreignOrigin.status).toBe(403);
     expect(foreignOrigin.error).toBe("forbidden: cross-origin request");
+  });
+
+  it("renews a session only for a request that passed the origin and scope checks", () => {
+    let clock = 1_700_000_000_000;
+    sessions = new SessionRegistry({ file: join(dir, "sessions.json"), now: () => clock });
+    const { code } = sessions.openPairing({ scopes: ["client"] });
+    const result = sessions.exchange({ code, label: "phone", source: "10.0.0.2" });
+    if (!result.ok) throw new Error(result.error);
+    const { token, session } = result;
+    clock += SESSION_TTL_MS / 2 + 1; // renewal is due from here on
+    const csrf = resolve({ host: "bots.example.com", cookie: `${cookieName}=${token}`, origin: "https://evil.example" }, "/api/bots", "POST");
+    expect(csrf.error).toBe("forbidden: cross-origin request");
+    expect(sessions.list()[0]?.expiresAt).toBe(session.expiresAt); // a rejected request is not use
+    const overScope = resolve({ authorization: `Bearer ${token}` }, "/api/bots", "POST");
+    expect(overScope.status).toBe(403);
+    expect(sessions.list()[0]?.expiresAt).toBe(session.expiresAt);
+    const ok = resolve({ host: "bots.example.com", cookie: `${cookieName}=${token}`, origin: "http://bots.example.com" });
+    expect(ok.auth?.kind).toBe("session");
+    expect(sessions.list()[0]?.expiresAt).toBe(clock + SESSION_TTL_MS);
   });
 
   it("requires the packaged desktop capability for public loopback mutations", () => {

@@ -345,6 +345,8 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
     if (!session.scopes.includes(needed)) {
       return deny(403, `forbidden: this session lacks the ${needed} scope`);
     }
+    // Only a request that passed both checks counts as use of the session.
+    options.sessions.renew(session.id);
     return { auth: { kind: "session", session, via, scopes: session.scopes }, status: 401, error: "" };
   }
 

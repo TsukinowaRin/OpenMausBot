@@ -14,7 +14,9 @@ import {
   SESSION_TTL_MS,
   SessionRegistry,
   STREAM_TICKET_TTL_MS,
-  sessionTtlMs,
+  SESSION_MAX_AGE_MS,
+  cookieMaxAgeSeconds,
+  daysMs,
 } from "./sessions.ts";
 
 let dir: string;
@@ -143,11 +145,11 @@ describe("sessions", () => {
     expect(reloaded.authenticate("omb_sess_nope")).toBeNull();
   });
 
-  it("expires after 30 days without use and can be revoked", () => {
+  it("expires after 30 days and can be revoked", () => {
     const { token, session } = pair();
-    clock += SESSION_TTL_MS / 2 - 1;
-    expect(registry.authenticate(token)?.id).toBe(session.id); // before the halfway mark: no renewal
-    clock += SESSION_TTL_MS / 2 + 2;
+    clock += SESSION_TTL_MS - 1;
+    expect(registry.authenticate(token)?.id).toBe(session.id);
+    clock += 2;
     expect(registry.authenticate(token)).toBeNull();
     const other = pair("iPad");
     expect(registry.list().map((s) => s.label)).toEqual(["iPad"]);
@@ -168,29 +170,58 @@ describe("sessions", () => {
     expect(statSync(file()).mtimeMs).toBeGreaterThanOrEqual(before);
   });
 
-  it("renews a session used past its halfway mark, and re-issues the cookie once", () => {
+  it("renews a session with half its term or less left, and never revives an expired one", () => {
     const { token, session } = pair();
-    expect(registry.cookieRefreshSeconds(session.id)).toBeNull(); // the exchange's cookie is current
     clock += SESSION_TTL_MS / 2 - 60_000;
-    registry.authenticate(token);
-    expect(registry.list()[0]?.expiresAt).toBe(session.expiresAt); // not yet halfway: untouched
+    expect(registry.renew(session.id)).toBe(false); // more than half left: untouched
+    expect(registry.list()[0]?.expiresAt).toBe(session.expiresAt);
     clock += 120_000;
-    expect(registry.authenticate(token)?.id).toBe(session.id);
+    expect(registry.renew(session.id)).toBe(true);
     expect(registry.list()[0]?.expiresAt).toBe(clock + SESSION_TTL_MS);
-    expect(registry.cookieRefreshSeconds(session.id)).toBe(SESSION_TTL_MS / 1000);
-    expect(registry.cookieRefreshSeconds(session.id)).toBeNull(); // sent once, then quiet
+    expect(registry.renew(session.id)).toBe(false); // just renewed: nothing to do
     clock += SESSION_TTL_MS - 1;
     expect(registry.authenticate(token)?.id).toBe(session.id); // alive well past the original term
+    expect(registry.renew(session.id)).toBe(true);
     const reloaded = new SessionRegistry({ file: file(), now: () => clock });
-    expect(reloaded.cookieRefreshSeconds(session.id)).not.toBeNull(); // a fresh process re-sends once
+    expect(reloaded.list()[0]?.expiresAt).toBe(clock + SESSION_TTL_MS); // the renewal reached disk
+    const quiet = pair("iPad");
+    clock += SESSION_TTL_MS + 1;
+    expect(registry.renew(quiet.session.id)).toBe(false);
+    expect(registry.authenticate(quiet.token)).toBeNull();
   });
 
-  it("reads the term from OMB_SESSION_TTL_DAYS and falls back to 30 days", () => {
-    const month = 30 * 24 * 60 * 60_000;
-    expect(sessionTtlMs(undefined)).toBe(month);
-    expect(sessionTtlMs("7")).toBe(7 * 24 * 60 * 60_000);
-    expect(sessionTtlMs("0")).toBe(month);
-    expect(sessionTtlMs("soon")).toBe(month);
+  it("stops renewing at the absolute cap counted from pairing", () => {
+    const { token, session } = pair();
+    const cap = session.createdAt + SESSION_MAX_AGE_MS;
+    let last = session.expiresAt;
+    for (let i = 0; i < 20; i += 1) {
+      clock = last - SESSION_TTL_MS / 2; // exactly at the halfway mark, each time
+      registry.renew(session.id);
+      const now = registry.list()[0]?.expiresAt ?? 0;
+      expect(now).toBeLessThanOrEqual(cap);
+      expect(now).toBeGreaterThanOrEqual(last);
+      last = now;
+    }
+    expect(last).toBe(cap);
+    clock = cap - 1;
+    expect(registry.authenticate(token)?.id).toBe(session.id);
+    expect(registry.renew(session.id)).toBe(false); // at the cap: no further extension
+    clock = cap + 1;
+    expect(registry.authenticate(token)).toBeNull();
+  });
+
+  it("reads whole days from the environment and falls back on anything else", () => {
+    const day = 24 * 60 * 60_000;
+    expect(daysMs(undefined, 30)).toBe(30 * day);
+    expect(daysMs("7", 30)).toBe(7 * day);
+    for (const bad of ["0", "-1", "0.5", "soon", "1e308", "3651", ""]) expect(daysMs(bad, 30)).toBe(30 * day);
+    expect(daysMs("3650", 30)).toBe(3650 * day);
+  });
+
+  it("gives a cookie whole seconds, never less than one", () => {
+    expect(cookieMaxAgeSeconds({ expiresAt: 10_500 }, 0)).toBe(10);
+    expect(cookieMaxAgeSeconds({ expiresAt: 100 }, 0)).toBe(1);
+    expect(cookieMaxAgeSeconds({ expiresAt: 0 }, 5_000)).toBe(1);
   });
 });
 
