@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -208,6 +208,23 @@ describe("sessions", () => {
     expect(registry.renew(session.id)).toBe(false); // at the cap: no further extension
     clock = cap + 1;
     expect(registry.authenticate(token)).toBeNull();
+  });
+
+  it("applies the cap to a session paired long before this version", () => {
+    const day = 24 * 60 * 60_000;
+    const old = {
+      id: "old-device", tokenHash: "0".repeat(64), label: "old laptop", scopes: ["admin"],
+      createdAt: clock - 160 * day, lastSeenAt: clock - day, expiresAt: clock + 15 * day,
+    };
+    const older = { ...old, id: "older-device", tokenHash: "1".repeat(64), createdAt: clock - 175 * day };
+    writeFileSync(file(), JSON.stringify({ version: 1, sessions: [old, older] }));
+    const loaded = new SessionRegistry({ file: file(), now: () => clock });
+    // 160 days in with 15 left: the cap allows 20, so the renewal reaches the cap, not a full term
+    expect(loaded.renew("old-device")).toBe(true);
+    expect(loaded.list()[0]?.expiresAt).toBe(old.createdAt + SESSION_MAX_AGE_MS);
+    // 175 days in with 15 left: the cap (5 days out) is already below the term it has; nothing is taken away
+    expect(loaded.renew("older-device")).toBe(false);
+    expect(loaded.list()[1]?.expiresAt).toBe(older.expiresAt);
   });
 
   it("reads whole days from the environment and falls back on anything else", () => {

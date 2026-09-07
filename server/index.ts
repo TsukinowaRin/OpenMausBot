@@ -326,7 +326,7 @@ import {
   serializeSessionCookie,
   sessionCookieName,
 } from "./request-auth.ts";
-import { cookieMaxAgeSeconds, formatPairingCode, SESSION_TTL_MS, SessionRegistry, type Scope } from "./sessions.ts";
+import { cookieMaxAgeSeconds, formatPairingCode, SessionRegistry, type Scope } from "./sessions.ts";
 import { describeBrand, loadBrand } from "./brand.ts";
 import {
   PHONE_SECRET_PROTOCOL_VERSION,
@@ -7559,7 +7559,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED });
       if (wantsCookie) {
         const secure = requestOrigin(req)?.startsWith("https://") === true;
-        res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, result.token, { secure, maxAgeSeconds: SESSION_TTL_MS / 1000 }));
+        res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, result.token, { secure, maxAgeSeconds: cookieMaxAgeSeconds(result.session) }));
         return json(res, 200, { session: result.session, environment });
       }
       return json(res, 200, { token: result.token, session: result.session, environment });

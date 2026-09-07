@@ -205,9 +205,17 @@ describe("resolveRequestAuth", () => {
     const overScope = resolve({ authorization: `Bearer ${token}` }, "/api/bots", "POST");
     expect(overScope.status).toBe(403);
     expect(sessions.list()[0]?.expiresAt).toBe(session.expiresAt);
+    const { ticket } = sessions.issueStreamTicket(session.id);
+    const stream = resolve({ host: "bots.example.com" }, `/api/events?ticket=${ticket}`);
+    expect(stream.auth?.kind === "session" && stream.auth.via).toBe("ticket");
+    expect(sessions.list()[0]?.expiresAt).toBe(session.expiresAt); // a stream alone is not use
     const ok = resolve({ host: "bots.example.com", cookie: `${cookieName}=${token}`, origin: "http://bots.example.com" });
     expect(ok.auth?.kind).toBe("session");
     expect(sessions.list()[0]?.expiresAt).toBe(clock + SESSION_TTL_MS);
+    clock += SESSION_TTL_MS + 1;
+    const expired = resolve({ host: "bots.example.com", cookie: `${cookieName}=${token}`, origin: "http://bots.example.com" });
+    expect(expired.status).toBe(401);
+    expect(sessions.list()).toEqual([]); // expired: gone, not renewed
   });
 
   it("requires the packaged desktop capability for public loopback mutations", () => {

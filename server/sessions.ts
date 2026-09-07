@@ -4,8 +4,8 @@
 //
 // A pairing code is 12 characters from a 32-symbol alphabet with no 0/O/1/I
 // (60 bits), single use, five minutes. Exchanging it yields an opaque
-// session token (`omb_sess_…`, 256 bits) that lives 30 days; only its sha256
-// is stored. A stream ticket is a 5-minute single-use credential for the SSE
+// session token (`omb_sess_…`, 256 bits) that lives 30 days, renewed on use
+// up to 180 days from pairing (`renew`); only its sha256 is stored. A stream ticket is a 5-minute single-use credential for the SSE
 // endpoint, because EventSource cannot set headers. Failed exchanges are
 // counted per source: five in a minute lock that source out for ten.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -318,7 +318,9 @@ export class SessionRegistry {
       scopes: [...pairing.scopes],
       createdAt: now,
       lastSeenAt: now,
-      expiresAt: now + SESSION_TTL_MS,
+      // The absolute cap applies from the first term, so a TTL configured
+      // longer than the cap does not hand out a session the cap forbids.
+      expiresAt: now + Math.min(SESSION_TTL_MS, SESSION_MAX_AGE_MS),
     };
     this.sessions.push(record);
     this.lastSeenWrites.set(record.id, now); // the exchange itself was the first sighting
